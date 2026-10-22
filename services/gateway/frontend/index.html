@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TriageIQ</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>TriageIQ</h1>
+    <p>Reviewer: <strong id="reviewer"><!--# echo var="remote_user" --></strong></p>
+    <p>Pending: <span id="pending-count" class="badge">0</span></p>
+  </header>
+
+  <p id="status" role="status" aria-live="polite"></p>
+
+  <main>
+    <section aria-labelledby="review-heading">
+      <h2 id="review-heading">Review predictions</h2>
+      <p id="empty" hidden>Nothing to review right now.</p>
+      <ul id="review-list"></ul>
+    </section>
+
+    <section aria-labelledby="manual-heading">
+      <h2 id="manual-heading">Submit a ticket</h2>
+      <form id="manual-form">
+        <label for="manual-subject">Subject (optional)</label>
+        <input id="manual-subject" name="subject" maxlength="300">
+        <label for="manual-body">Body</label>
+        <textarea id="manual-body" name="body" required maxlength="5000" rows="6"></textarea>
+        <button type="submit">Predict queue</button>
+      </form>
+      <div id="manual-result" hidden></div>
+    </section>
+  </main>
+
+  <template id="card-template">
+    <li class="card">
+      <h3 class="subject"></h3>
+      <p class="body"></p>
+      <button type="button" class="more link">Show more</button>
+      <dl>
+        <dt>Predicted</dt><dd class="predicted"></dd>
+        <dt>Top 3</dt><dd><ol class="top-k"></ol></dd>
+        <dt>Model</dt><dd><code class="version"></code></dd>
+      </dl>
+      <div class="actions">
+        <button type="button" class="correct">✓ Correct</button>
+        <label class="fix-label">Correct queue
+          <select class="fix-select"></select>
+        </label>
+        <button type="button" class="fix">Fix</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>

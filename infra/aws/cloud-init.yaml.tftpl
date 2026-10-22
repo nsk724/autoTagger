@@ -1,0 +1,21 @@
+#cloud-config
+package_update: true
+packages: [ca-certificates, curl, git, gnupg]
+runcmd:
+  # 1. Docker Engine + compose plugin: same official apt repo steps as ops/jenkins/Dockerfile
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - sh -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - snap install aws-cli --classic
+  # 2. secrets: the whole .env lives in ONE SecureString SSM parameter (created by hand, never in Terraform state)
+  - aws ssm get-parameter --region ${region} --name ${dotenv_param_name} --with-decryption --query Parameter.Value --output text > /root/triageiq.env
+  - chmod 600 /root/triageiq.env
+  # 3. code at the requested ref
+  - sh -c 'set -a; . /root/triageiq.env; set +a; git clone --branch ${git_ref} "https://x-access-token:$GITHUB_TOKEN@$(echo ${git_repo_url} | sed s#https://##)" /opt/triageiq'
+  - mv /root/triageiq.env /opt/triageiq/.env
+  # 4. data for the generator image (host shell, so this bind mount is fine)
+  - cd /opt/triageiq && docker run --rm -v /opt/triageiq:/repo -w /repo --env-file .env python:3.11 sh -c 'pip install -q dvc==3.67.1 && dvc remote modify origin --local auth basic && dvc remote modify origin --local user "$DAGSHUB_USER" && dvc remote modify origin --local password "$DAGSHUB_TOKEN" && dvc pull data/processed'
+  # 5. start everything (identical to the PC; add --profile monitoring once B7 exists)
+  - cd /opt/triageiq && docker compose --profile ops --profile public up -d --build

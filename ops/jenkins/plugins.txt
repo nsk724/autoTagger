@@ -1,0 +1,11 @@
+configuration-as-code:2136.veb_3a_554550b_f
+job-dsl:3732.v9a_c49a_61a_313
+workflow-aggregator:608.v67378e9d3db_1
+git:5.11.0
+docker-workflow:653.v2f2c08eff0ec
+generic-webhook-trigger:2.4.3
+credentials-binding:728.v902a_273b_8947
+timestamper:1.30
+ws-cleanup:0.49
+pipeline-stage-view:2.41
+pipeline-model-definition:2.2293.v6e7193cec599

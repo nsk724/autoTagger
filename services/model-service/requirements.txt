@@ -1,0 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+fastapi==0.158.1
+huggingface_hub==2.2.0
+joblib==1.6.0
+numpy==2.4.6
+pandas==3.0.6
+prometheus-fastapi-instrumentator==8.1.0
+pydantic==2.14.1
+pydantic-settings==2.16.1
+python-json-logger==4.2.0
+scikit-learn==1.9.1
+sentence-transformers==6.2.0
+uvicorn==0.54.0

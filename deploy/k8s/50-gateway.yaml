@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: triageiq
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: gateway}}
+  template:
+    metadata: {labels: {app: gateway}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: gateway
+          image: triageiq-gateway:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GATEWAY_HTPASSWD
+              valueFrom: {secretKeyRef: {name: triageiq-env, key: GATEWAY_HTPASSWD}}
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10}
+          livenessProbe:  {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 20}
+          resources:
+            requests: {cpu: 50m,  memory: 16Mi}
+            limits:   {cpu: 500m, memory: 64Mi}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: conf, mountPath: /etc/nginx/conf.d}   # the template is rendered here at start
+      volumes:
+        - {name: tmp, emptyDir: {}}
+        - {name: conf, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: triageiq
+spec:
+  type: NodePort
+  selector: {app: gateway}
+  ports: [{port: 8080, targetPort: 8080, nodePort: 30080}]

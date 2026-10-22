@@ -1,0 +1,43 @@
+jenkins:
+  systemMessage: "TriageIQ CI: configured as code. UI changes are lost on restart."
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  globalNodeProperties:
+    - envVars:
+        env:                                   # NON-secret config only
+          - {key: HF_MODEL_REPO,     value: "${HF_MODEL_REPO}"}
+          - {key: HF_SPACE_REPO,     value: "${HF_SPACE_REPO}"}
+          - {key: MODEL_SERVICE_URL, value: "${MODEL_SERVICE_URL}"}
+          - {key: MLFLOW_TRACKING_URI, value: "${MLFLOW_TRACKING_URI}"}
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword: {scope: GLOBAL, id: github-readonly, username: "git", password: "${GITHUB_TOKEN}"}
+          - usernamePassword: {scope: GLOBAL, id: dagshub, username: "${DAGSHUB_USER}", password: "${DAGSHUB_TOKEN}"}
+          - string: {scope: GLOBAL, id: hf-token-write, secret: "${HF_TOKEN_WRITE}"}
+          - string: {scope: GLOBAL, id: hf-token-read,  secret: "${HF_TOKEN_READ}"}
+          - string: {scope: GLOBAL, id: postgres-password, secret: "${POSTGRES_PASSWORD}"}
+          - string: {scope: GLOBAL, id: retrain-webhook-token, secret: "${RETRAIN_WEBHOOK_TOKEN}"}
+          - usernamePassword: {scope: GLOBAL, id: smoke-user, username: "smoke", password: "${SMOKE_PASSWORD}"}
+jobs:
+  - script: >
+      multibranchPipelineJob('triageiq') {
+        branchSources { git { id('triageiq-repo'); remote('${GITHUB_REPO_URL}'); credentialsId('github-readonly') } }
+        triggers { periodicFolderTrigger { interval('2m') } }
+      }
+  - script: >
+      pipelineJob('triageiq-retrain') {
+        definition { cpsScm {
+          scm { git { remote { url('${GITHUB_REPO_URL}'); credentials('github-readonly') }; branch('*/main') } }
+          scriptPath('Jenkinsfile.retrain'); lightweight(true)
+        } }
+      }

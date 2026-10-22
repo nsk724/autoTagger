@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feedback-service
+  namespace: triageiq
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: feedback-service}}
+  template:
+    metadata: {labels: {app: feedback-service}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: feedback-service
+          image: triageiq-feedback-service:dev              # loaded into kind, never pulled
+          imagePullPolicy: IfNotPresent
+          envFrom: [{secretRef: {name: triageiq-env}}]
+          env:
+            - {name: DATABASE_URL, value: "postgresql://triageiq:$(POSTGRES_PASSWORD)@postgres:5432/triageiq"}
+          ports: [{containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+          livenessProbe:  {httpGet: {path: /health, port: 8000}, initialDelaySeconds: 20, periodSeconds: 20}
+          resources:
+            requests: {cpu: 50m,  memory: 72Mi}
+            limits:   {cpu: 500m, memory: 192Mi}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: feedback-service
+  namespace: triageiq
+spec:
+  selector: {app: feedback-service}
+  ports: [{port: 8000, targetPort: 8000}]

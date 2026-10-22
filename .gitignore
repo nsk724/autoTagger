@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+artifacts/
+mlruns/
+.dvc/config.local
+deploy/k8s/.env.k8s
+*.tfstate*
+.terraform/
+# retrain snapshots: tracked via DVC + MLflow, never committed (B8)
+data/feedback/

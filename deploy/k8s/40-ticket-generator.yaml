@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticket-generator
+  namespace: triageiq
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ticket-generator}}
+  template:
+    metadata: {labels: {app: ticket-generator}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: ticket-generator
+          image: triageiq-ticket-generator:dev
+          imagePullPolicy: IfNotPresent
+          envFrom: [{secretRef: {name: triageiq-env}}]
+          env:
+            - {name: BACKEND_URL, value: "http://backend-api:8000"}
+          resources:
+            requests: {cpu: 50m,  memory: 144Mi}
+            limits:   {cpu: 500m, memory: 320Mi}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            # shortcut: generator cursor on emptyDir, a pod restart resends from the start; use a PVC if the kind stack runs for long
+            - {name: state, mountPath: /state}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: state, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}

@@ -1,0 +1,86 @@
+pipeline {
+  agent { docker { image 'triageiq-ml:latest'; args '--network triageiq_default' } }   // can reach postgres by name
+  parameters { choice(name: 'TRIGGER', choices: ['alert', 'manual', 'schedule'], description: 'Why this run started') }
+  triggers {
+    GenericTrigger(
+      genericVariables: [[key: 'status', value: '$.status']],
+      tokenCredentialId: 'retrain-webhook-token',
+      regexpFilterText: '$status',
+      regexpFilterExpression: '^firing$',          // second guard: ignore "resolved" even if Alertmanager sends it
+      causeString: 'Alertmanager: $status',
+      printContributedVariables: false
+    )
+  }
+  options { disableConcurrentBuilds(); timeout(time: 90, unit: 'MINUTES'); timestamps() }
+  environment {
+    HOME = "${env.WORKSPACE}"
+    OUTCOME = 'failed'
+  }
+  stages {
+    stage('Should run?') {
+      steps {
+        withCredentials([string(credentialsId: 'postgres-password', variable: 'PGPW')]) {
+          script {
+            env.DATABASE_URL = "postgresql://triageiq:${PGPW}@postgres:5432/triageiq"
+            def rc = sh(script: 'python -m triage_ml.runs should-run --cooldown-minutes 60', returnStatus: true)
+            if (rc == 10) { env.SKIP = 'true'; currentBuild.description = 'skipped: cooldown or no new feedback' }
+            else if (rc != 0) { error "should-run failed (${rc})" }
+          }
+        }
+      }
+    }
+    stage('Retrain') {
+      when { expression { env.SKIP != 'true' } }
+      steps {
+        withCredentials([
+          string(credentialsId: 'postgres-password', variable: 'PGPW'),
+          usernamePassword(credentialsId: 'dagshub', usernameVariable: 'DAGSHUB_USER', passwordVariable: 'DAGSHUB_TOKEN'),
+          string(credentialsId: 'hf-token-write', variable: 'HF_TOKEN_WRITE'),
+          string(credentialsId: 'hf-token-read',  variable: 'HF_TOKEN_READ')
+        ]) {
+          script {
+            env.DATABASE_URL = "postgresql://triageiq:${PGPW}@postgres:5432/triageiq"
+            env.MLFLOW_TRACKING_USERNAME = env.DAGSHUB_USER
+            env.MLFLOW_TRACKING_PASSWORD = env.DAGSHUB_TOKEN
+            env.RUN_ID = sh(script: "python -m triage_ml.runs start --trigger ${params.TRIGGER} --build ${env.BUILD_TAG}", returnStdout: true).trim()
+
+            def rc = sh(script: 'python -m triage_ml.export_feedback --run-id "$RUN_ID" --out data/feedback/ > snapshot.txt', returnStatus: true)
+            if (rc == 4) { env.OUTCOME = 'skipped'; return }
+            if (rc != 0) { error "export failed (${rc})" }
+            env.SNAPSHOT = readFile('snapshot.txt').trim()
+
+            sh '''
+              dvc remote modify origin --local auth basic
+              dvc remote modify origin --local user "$DAGSHUB_USER"
+              dvc remote modify origin --local password "$DAGSHUB_TOKEN"
+              dvc pull data/processed
+              dvc add "$SNAPSHOT" && dvc push            # .dvc file is NOT committed: train logs it to MLflow instead
+              python -m triage_ml.train --feedback-snapshot "$SNAPSHOT" --run-id "$RUN_ID" --out artifacts/
+            '''
+
+            rc = sh(script: 'python -m triage_ml.evaluate --challenger artifacts/ --out eval.json', returnStatus: true)
+            if (rc == 3 || rc == 4) { env.OUTCOME = 'rejected'; return }
+            if (rc != 0) { error "evaluate failed (${rc})" }
+
+            env.CANDIDATE = sh(script: 'python -m triage_ml.publish --artifacts artifacts/ --run-id "$RUN_ID"', returnStdout: true).trim()
+            sh 'python -m triage_ml.promote --revision "$CANDIDATE"'
+            env.OUTCOME = 'promoted'
+          }
+        }
+      }
+    }
+  }
+  post {
+    always {
+      script {
+        if (env.RUN_ID) {
+          withCredentials([string(credentialsId: 'postgres-password', variable: 'PGPW')]) {
+            sh "DATABASE_URL=postgresql://triageiq:\$PGPW@postgres:5432/triageiq python -m triage_ml.runs finish --run-id ${env.RUN_ID} --outcome ${currentBuild.currentResult == 'SUCCESS' ? env.OUTCOME : 'failed'}"
+          }
+        }
+      }
+      archiveArtifacts artifacts: 'eval.json, artifacts/metadata.json', allowEmptyArchive: true
+      cleanWs()
+    }
+  }
+}

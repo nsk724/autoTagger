@@ -1,0 +1,10 @@
+*
+!config/
+!ml/
+!ops/
+!services/
+!scripts/
+!data/processed/
+**/tests/
+**/__pycache__/
+**/.pytest_cache/

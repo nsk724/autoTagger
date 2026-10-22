@@ -1,0 +1,125 @@
+name: triageiq
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  gateway:
+    <<: *hardening
+    build: {context: ., dockerfile: services/gateway/Dockerfile}
+    image: ${REGISTRY:-}triageiq-gateway:${IMAGE_TAG:-dev}
+    environment:
+      GATEWAY_HTPASSWD: ${GATEWAY_HTPASSWD}
+    ports: ["127.0.0.1:${GATEWAY_PORT:-8080}:8080"]
+    tmpfs: [/tmp, "/etc/nginx/conf.d:uid=101,gid=101"]   # template is rendered into conf.d at start by UID 101
+    depends_on:
+      backend-api: {condition: service_healthy}
+      feedback-service: {condition: service_healthy}
+    deploy: {resources: {limits: {memory: 64M, cpus: "0.50"}}}   # A8: 2 x measured peak
+
+  backend-api:
+    <<: *hardening
+    build: {context: ., dockerfile: services/backend-api/Dockerfile}
+    image: ${REGISTRY:-}triageiq-backend-api:${IMAGE_TAG:-dev}
+    environment:
+      DATABASE_URL: postgresql://triageiq:${POSTGRES_PASSWORD}@postgres:5432/triageiq
+      MODEL_SERVICE_URL: ${MODEL_SERVICE_URL}
+      MODEL_SERVICE_TOKEN: ${MODEL_SERVICE_TOKEN:-}
+      MODEL_CALL_TIMEOUT_SECONDS: ${MODEL_CALL_TIMEOUT_SECONDS:-30}
+      HF_MODEL_REPO: ${HF_MODEL_REPO}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres: {condition: service_healthy}
+    deploy: {resources: {limits: {memory: 128M, cpus: "0.50"}}}   # A8: 2 x measured peak
+
+  feedback-service:
+    <<: *hardening
+    build: {context: ., dockerfile: services/feedback-service/Dockerfile}
+    image: ${REGISTRY:-}triageiq-feedback-service:${IMAGE_TAG:-dev}
+    environment:
+      DATABASE_URL: postgresql://triageiq:${POSTGRES_PASSWORD}@postgres:5432/triageiq
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres: {condition: service_healthy}
+    deploy: {resources: {limits: {memory: 192M, cpus: "0.50"}}}   # A8: 2 x measured peak
+
+  ticket-generator:
+    <<: *hardening
+    build: {context: ., dockerfile: services/ticket-generator/Dockerfile}
+    image: ${REGISTRY:-}triageiq-ticket-generator:${IMAGE_TAG:-dev}
+    environment:
+      BACKEND_URL: http://backend-api:8000
+      TICKET_INTERVAL_SECONDS: ${TICKET_INTERVAL_SECONDS:-15}
+      DRIFT_ENABLED: ${DRIFT_ENABLED:-false}
+      DRIFT_START_AFTER: ${DRIFT_START_AFTER:-100}
+      DRIFT_RATIO: ${DRIFT_RATIO:-0.4}
+      DRIFT_SEED: ${DRIFT_SEED:-42}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes: [generator_state:/state]
+    depends_on:
+      backend-api: {condition: service_healthy}
+    deploy: {resources: {limits: {memory: 320M, cpus: "0.50"}}}   # A8: 2 x measured peak
+
+  postgres:
+    build: {context: ., dockerfile: services/postgres/Dockerfile}
+    image: ${REGISTRY:-}triageiq-postgres:${IMAGE_TAG:-dev}
+    environment:
+      POSTGRES_USER: triageiq
+      POSTGRES_DB: triageiq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U triageiq"], interval: 5s, retries: 10}
+    # no cap_drop/read_only: the entrypoint needs root caps to chown the data dir and drop to the postgres user
+    security_opt: ["no-new-privileges:true"]
+    # A8 peak 46 MiB (x2 = 128M), raised: default shared_buffers alone is 128 MB once the DB fills
+    deploy: {resources: {limits: {memory: 256M, cpus: "1.0"}}}
+    restart: unless-stopped
+
+  model-service:   # local copy; normally the model runs on the HF Space
+    <<: *hardening
+    build: {context: ., dockerfile: services/model-service/Dockerfile}
+    image: ${REGISTRY:-}triageiq-model-service:${IMAGE_TAG:-dev}
+    profiles: [local-model]
+    environment:
+      HF_MODEL_REPO: ${HF_MODEL_REPO}
+      MODEL_REVISION: ${MODEL_REVISION:-main}
+      HF_TOKEN: ${HF_TOKEN_READ:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    deploy: {resources: {limits: {memory: 960M, cpus: "1.0"}}}   # A8: 2 x measured peak (encoder + TF-IDF)
+
+  jenkins:
+    build: {context: ., dockerfile: ops/jenkins/Dockerfile}
+    image: triageiq-jenkins:local
+    profiles: [ops]
+    env_file: [{path: .env, required: false}]   # CI validates this file without a .env
+    ports: ["127.0.0.1:8090:8080"]
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock     # the one allowed host mount (Part 0.5 rule 3)
+    group_add: ["${DOCKER_SOCK_GID:-0}"]
+    deploy: {resources: {limits: {memory: 2G}}}
+    restart: unless-stopped
+
+  tunnel-quick:    # POC: no account, no domain, random URL each start
+    image: cloudflare/cloudflared:2026.10.3
+    command: ["tunnel", "--no-autoupdate", "--url", "http://gateway:8080"]
+    profiles: [public-quick]
+    depends_on: {gateway: {condition: service_healthy}}
+    restart: unless-stopped
+
+  tunnel:          # named tunnel from infra/cloudflare: fixed hostname on your domain
+    image: cloudflare/cloudflared:2026.10.3
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment: {TUNNEL_TOKEN: "${TUNNEL_TOKEN:-}"}
+    profiles: [public]
+    depends_on: {gateway: {condition: service_healthy}}
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  generator_state:
+  jenkins_home:
